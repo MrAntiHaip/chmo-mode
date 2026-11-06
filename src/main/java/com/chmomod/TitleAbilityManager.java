@@ -69,7 +69,7 @@ public class TitleAbilityManager {
                 return false;
             }
 
-            // [Титул 11] Временная петля: спасение от смертельного удара
+            // [Титул 11] Временная петля: пассивное спасение от смертельного удара
             if (tier >= 11 && player.getHealth() - amount <= 0.0f) {
                 if (tryRewindTime(player, true)) {
                     return false;
@@ -157,7 +157,7 @@ public class TitleAbilityManager {
     private static void onServerTick(MinecraftServer server) {
         long ticks = server.getTicks();
 
-        Iterator<Map.Entry<GlobalBlockPos, Long>> it = tempBlocks.entrySet().iterator();
+        Iterator> it = tempBlocks.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<GlobalBlockPos, Long> entry = it.next();
             if (ticks >= entry.getValue()) {
@@ -230,7 +230,7 @@ public class TitleAbilityManager {
                 }
             }
 
-            // [Титул 10] Телекинез
+            // [Титул 10] Телекинез (удержание схваченной цели)
             if (grabbedEntities.containsKey(player.getUuid())) {
                 Entity grabbed = world.getEntityById(grabbedEntities.get(player.getUuid()));
                 if (grabbed == null || !grabbed.isAlive() || grabbed.squaredDistanceTo(player) > 100) {
@@ -279,9 +279,15 @@ public class TitleAbilityManager {
 
     public static void triggerActiveAbility(ServerPlayerEntity player) {
         int tier = getPlayerTier(player);
+        int chosen = ChmoMod.getSelectedAbility(player);
+        if (chosen > tier) {
+            chosen = ChmoMod.getDefaultActiveAbilityForTier(tier);
+        }
+
         ServerWorld world = player.getServerWorld();
         long now = world.getServer().getTicks();
 
+        // Если уже кого-то держим гравипушкой — бросаем!
         if (grabbedEntities.containsKey(player.getUuid())) {
             Entity grabbed = world.getEntityById(grabbedEntities.remove(player.getUuid()));
             if (grabbed != null) {
@@ -301,7 +307,7 @@ public class TitleAbilityManager {
             return;
         }
 
-        if (tier >= 12) {
+        if (chosen == 12) {
             HitResult hit = player.raycast(45.0, 0.0f, false);
             Vec3d target = hit.getPos();
             for (int i = 0; i < 3; i++) {
@@ -318,12 +324,14 @@ public class TitleAbilityManager {
             player.sendMessage(Text.literal("⚡️ ОРБИТАЛЬНЫЙ УДАР C.H.M.O!").formatted(Formatting.AQUA, Formatting.BOLD), true);
             abilityCooldowns.put(player.getUuid(), now + 200);
 
-        } else if (tier == 11) {
+        } else if (chosen == 11) {
             if (tryRewindTime(player, false)) {
                 abilityCooldowns.put(player.getUuid(), now + 400);
+            } else {
+                player.sendMessage(Text.literal("⏳ История времени еще записывается, подожди пару секунд!").formatted(Formatting.YELLOW), true);
             }
 
-        } else if (tier == 10) {
+        } else if (chosen == 10) {
             Vec3d lookPos = player.getEyePos().add(player.getRotationVector().multiply(3.5));
             List<LivingEntity> targets = world.getEntitiesByClass(LivingEntity.class, Box.of(lookPos, 4, 4, 4), e -> e != player);
             if (!targets.isEmpty()) {
@@ -335,7 +343,7 @@ public class TitleAbilityManager {
                 player.sendMessage(Text.literal("Наведи прицел поближе к мобу или напарнику!").formatted(Formatting.GRAY), true);
             }
 
-        } else if (tier >= 4) {
+        } else if (chosen == 4) {
             ServerPlayerEntity partner = findPartner(player);
             if (partner != null && partner.squaredDistanceTo(player) <= 144) {
                 ItemStack held = partner.getMainHandStack();
@@ -362,7 +370,7 @@ public class TitleAbilityManager {
             player.setVelocity(dash);
             player.velocityModified = true;
             world.playSound(null, player.getBlockPos(), SoundEvents.ENTITY_SLIME_JUMP, SoundCategory.PLAYERS, 1.0f, 1.2f);
-            player.sendMessage(Text.literal("🐟 Рывок Инфузории! (Прокачай титул для новых активок)").formatted(Formatting.AQUA), true);
+            player.sendMessage(Text.literal("🐟 Рывок Инфузории!").formatted(Formatting.AQUA), true);
             abilityCooldowns.put(player.getUuid(), now + 100);
         }
     }
