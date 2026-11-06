@@ -157,7 +157,7 @@ public class TitleAbilityManager {
     private static void onServerTick(MinecraftServer server) {
         long ticks = server.getTicks();
 
-        Iterator> it = tempBlocks.entrySet().iterator();
+        Iterator<Map.Entry<GlobalBlockPos, Long>> it = tempBlocks.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<GlobalBlockPos, Long> entry = it.next();
             if (ticks >= entry.getValue()) {
@@ -226,7 +226,7 @@ public class TitleAbilityManager {
                     }
                 }
                 for (CreeperEntity creeper : world.getEntitiesByClass(CreeperEntity.class, player.getBoundingBox().expand(4.5), c -> true)) {
-                    creeper.setFuseSpeed(-1);
+                    creeper.getNavigation().startMovingTo(player.getX() + (creeper.getX() - player.getX()) * 2, creeper.getY(), creeper.getZ() + (creeper.getZ() - player.getZ()) * 2, 1.5);
                 }
             }
 
