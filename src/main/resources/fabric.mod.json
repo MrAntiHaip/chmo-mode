@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "chmomod",
+  "version": "${version}",
+  "name": "Путь от Инфузории до C.H.M.O (Дима & Ульяна)",
+  "description": "Кооперативный мод на 12 ступеней прокачки с необычными способностями каждого титула, пранками и вечным компасом!",
+  "authors": [
+    "Dima & Ulyana Edition"
+  ],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.chmomod.ChmoMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.21",
+    "minecraft": "~1.20.1",
+    "java": ">=17",
+    "fabric-api": "*"
+  }
+}
