@@ -4,87 +4,53 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.PersistentState;
 import net.minecraft.world.PersistentStateManager;
-import net.minecraft.world.World;
-
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 public class ChmoState extends PersistentState {
-    // Текущий уровень титула (от 1 до 12)
-    public final Map<UUID, Integer> titleLevels = new HashMap<>();
-    // Выбранная способность в компасе (0 = выключено, 1..12 = номер способности)
-    public final Map<UUID, Integer> selectedAbility = new HashMap<>();
-    // Общий счётчик убитых враждебных мобов
-    public final Map<UUID, Integer> mobKills = new HashMap<>();
-
-    public int getTitleLevel(UUID uuid) {
-        return titleLevels.getOrDefault(uuid, 1);
-    }
-
-    public void setTitleLevel(UUID uuid, int level) {
-        titleLevels.put(uuid, level);
-        markDirty();
-    }
-
-    public int getSelectedAbility(UUID uuid) {
-        return selectedAbility.getOrDefault(uuid, 0);
-    }
-
-    public void setSelectedAbility(UUID uuid, int abilityId) {
-        selectedAbility.put(uuid, abilityId);
-        markDirty();
-    }
-
-    public int getMobKills(UUID uuid) {
-        return mobKills.getOrDefault(uuid, 0);
-    }
-
-    public void addMobKill(UUID uuid) {
-        mobKills.put(uuid, getMobKills(uuid) + 1);
-        markDirty();
-    }
+    public Map<UUID, Integer> playerTiers = new HashMap<>();
+    public Map<UUID, Integer> mobKills = new HashMap<>();
+    public Map<UUID, String> playerRoles = new HashMap<>();
+    public UUID winnerUuid = null;
 
     @Override
     public NbtCompound writeNbt(NbtCompound nbt) {
-        NbtCompound levelsNbt = new NbtCompound();
-        titleLevels.forEach((uuid, lvl) -> levelsNbt.putInt(uuid.toString(), lvl));
-        nbt.put("TitleLevels", levelsNbt);
+        NbtCompound tiers = new NbtCompound();
+        playerTiers.forEach((k, v) -> tiers.putInt(k.toString(), v));
+        nbt.put("tiers", tiers);
 
-        NbtCompound abilityNbt = new NbtCompound();
-        selectedAbility.forEach((uuid, ab) -> abilityNbt.putInt(uuid.toString(), ab));
-        nbt.put("SelectedAbilities", abilityNbt);
+        NbtCompound kills = new NbtCompound();
+        mobKills.forEach((k, v) -> kills.putInt(k.toString(), v));
+        nbt.put("kills", kills);
 
-        NbtCompound killsNbt = new NbtCompound();
-        mobKills.forEach((uuid, kills) -> killsNbt.putInt(uuid.toString(), kills));
-        nbt.put("MobKills", killsNbt);
+        NbtCompound roles = new NbtCompound();
+        playerRoles.forEach((k, v) -> roles.putString(k.toString(), v));
+        nbt.put("roles", roles);
 
+        if (winnerUuid != null) nbt.putString("winner", winnerUuid.toString());
         return nbt;
     }
 
-    public static ChmoState createFromNbt(NbtCompound tag) {
+    public static ChmoState createFromNbt(NbtCompound nbt) {
         ChmoState state = new ChmoState();
+        NbtCompound tiers = nbt.getCompound("tiers");
+        tiers.getKeys().forEach(k -> state.playerTiers.put(UUID.fromString(k), tiers.getInt(k)));
+        
+        NbtCompound kills = nbt.getCompound("kills");
+        kills.getKeys().forEach(k -> state.mobKills.put(UUID.fromString(k), kills.getInt(k)));
 
-        NbtCompound levelsNbt = tag.getCompound("TitleLevels");
-        for (String key : levelsNbt.getKeys()) {
-            state.titleLevels.put(UUID.fromString(key), levelsNbt.getInt(key));
-        }
+        NbtCompound roles = nbt.getCompound("roles");
+        roles.getKeys().forEach(k -> state.playerRoles.put(UUID.fromString(k), roles.getString(k)));
 
-        NbtCompound abilityNbt = tag.getCompound("SelectedAbilities");
-        for (String key : abilityNbt.getKeys()) {
-            state.selectedAbility.put(UUID.fromString(key), abilityNbt.getInt(key));
-        }
-
-        NbtCompound killsNbt = tag.getCompound("MobKills");
-        for (String key : killsNbt.getKeys()) {
-            state.mobKills.put(UUID.fromString(key), killsNbt.getInt(key));
-        }
-
+        if (nbt.contains("winner")) state.winnerUuid = UUID.fromString(nbt.getString("winner"));
         return state;
     }
 
     public static ChmoState getServerState(MinecraftServer server) {
-        PersistentStateManager manager = server.getWorld(World.OVERWORLD).getPersistentStateManager();
-        return manager.getOrCreate(ChmoState::createFromNbt, ChmoState::new, "chmomod_state");
+        PersistentStateManager manager = server.getOverworld().getPersistentStateManager();
+        ChmoState state = manager.getOrCreate(ChmoState::createFromNbt, ChmoState::new, "chmomod_data");
+        state.markDirty();
+        return state;
     }
 }
