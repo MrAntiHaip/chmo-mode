@@ -13,6 +13,7 @@ public class ChmoState extends PersistentState {
     public final Map<UUID, Integer> playerTiers = new HashMap<>();
     public final Map<UUID, String> playerRoles = new HashMap<>();
     public final Map<UUID, Integer> mobKills = new HashMap<>();
+    public final Map<UUID, Integer> selectedAbility = new HashMap<>();
     public UUID winnerUuid = null;
 
     @Override
@@ -28,6 +29,10 @@ public class ChmoState extends PersistentState {
         NbtCompound killsNbt = new NbtCompound();
         mobKills.forEach((uuid, kills) -> killsNbt.putInt(uuid.toString(), kills));
         nbt.put("MobKills", killsNbt);
+
+        NbtCompound abilityNbt = new NbtCompound();
+        selectedAbility.forEach((uuid, abil) -> abilityNbt.putInt(uuid.toString(), abil));
+        nbt.put("SelectedAbility", abilityNbt);
 
         if (winnerUuid != null) {
             nbt.putString("WinnerUuid", winnerUuid.toString());
@@ -49,6 +54,12 @@ public class ChmoState extends PersistentState {
         for (String key : killsNbt.getKeys()) {
             state.mobKills.put(UUID.fromString(key), killsNbt.getInt(key));
         }
+        if (nbt.contains("SelectedAbility")) {
+            NbtCompound abilityNbt = nbt.getCompound("SelectedAbility");
+            for (String key : abilityNbt.getKeys()) {
+                state.selectedAbility.put(UUID.fromString(key), abilityNbt.getInt(key));
+            }
+        }
         if (nbt.contains("WinnerUuid")) {
             state.winnerUuid = UUID.fromString(nbt.getString("WinnerUuid"));
         }
@@ -57,7 +68,7 @@ public class ChmoState extends PersistentState {
 
     public static ChmoState getServerState(MinecraftServer server) {
         var stateManager = server.getWorld(World.OVERWORLD).getPersistentStateManager();
-        ChmoState state = stateManager.getOrCreate(ChmoState::createFromNbt, ChmoState::new, "chmo_mod_data_v2");
+        ChmoState state = stateManager.getOrCreate(ChmoState::createFromNbt, ChmoState::new, "chmo_mod_data_v3");
         state.markDirty();
         return state;
     }
