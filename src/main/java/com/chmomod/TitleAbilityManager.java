@@ -1,229 +1,115 @@
 package com.chmomod;
 
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.LightningEntity;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.SimpleInventory;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
+import net.minecraft.block.Block;
+import net.minecraft.block.Blocks;
+import net.minecraft.entity.*;
+import net.minecraft.entity.damage.DamageTypes;
+import net.minecraft.entity.mob.CreeperEntity;
+import net.minecraft.entity.passive.AnimalEntity;
+import net.minecraft.entity.passive.ChickenEntity;
+import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.screen.GenericContainerScreenHandler;
-import net.minecraft.screen.NamedScreenHandlerFactory;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.ScreenHandlerType;
-import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.particle.ParticleTypes;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Formatting;
-import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
+import java.util.*;
 
 public class TitleAbilityManager {
+    private static final Map<UUID, Integer> grabbedEntities = new HashMap<>();
+    private static final Map<UUID, Deque<PlayerSnapshot>> timeHistory = new HashMap<>();
+    private static final Map<UUID, Long> abilityCooldowns = new HashMap<>();
+    private static final Map<GlobalBlockPos, Long> tempBlocks = new HashMap<>();
 
-    // Названия титулов (1..12)
-    public static final String[] TITLE_NAMES = {
-        "",
-        "1. Чмо",
-        "2. Лошпед",
-        "3. Новичок",
-        "4. Шахтёр",
-        "5. Охотник",
-        "6. Богач",
-        "7. Инженер",
-        "8. Чародей",
-        "9. Алмазник",
-        "10. Покоритель Ада",
-        "11. Ифрит",
-        "12. Властелин (Орбитальная пушка)"
-    };
+    public record PlayerSnapshot(ServerWorld world, Vec3d pos, float health, int food, float yaw, float pitch) {}
+    public record GlobalBlockPos(ServerWorld world, BlockPos pos) {}
 
-    // Разные цвета для каждой способности в компасе
-    public static final Item[] ABILITY_COLORS = {
-        Items.AIR,
-        Items.BROWN_DYE,      // 1
-        Items.LIGHT_GRAY_DYE, // 2 - Лошпед (Скорость I)
-        Items.YELLOW_DYE,     // 3 - Прыгучесть
-        Items.ORANGE_DYE,     // 4 - Спешка
-        Items.RED_DYE,        // 5 - Сила I
-        Items.GOLD_INGOT,     // 6 - Регенерация
-        Items.REDSTONE,       // 7 - Скорость II
-        Items.BLUE_DYE,       // 8 - Ночное зрение + Водное дыхание
-        Items.CYAN_DYE,       // 9 - Сопротивление
-        Items.PURPLE_DYE,     // 10 - Огнестойкость
-        Items.BLAZE_POWDER,   // 11 - Сила II + Прыгучесть II
-        Items.MAGENTA_DYE     // 12 - Орбитальная пушка
-    };
+    public static int getPlayerTier(ServerPlayerEntity player) { return ChmoMod.getPlayerTier(player); }
 
-    // Вызывается каждый тик сервера: накладывает ТОЛЬКО выбранную способность (без стаканья)
-    public static void tickPlayerAbility(ServerPlayerEntity player, ChmoState state) {
-        int selected = state.getSelectedAbility(player.getUuid());
-        int unlocked = state.getTitleLevel(player.getUuid());
-
-        // Если ничего не выбрано или способность выше уровня игрока — ничего не даём
-        if (selected <= 1 || selected > unlocked) {
-            return;
-        }
-
-        // Накладываем эффект на 40 тиков (2 сек), чтобы при смене способности в компасе старая сразу спадала
-        switch (selected) {
-            case 2 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, 40, 0, true, false));
-            case 3 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.JUMP_BOOST, 40, 1, true, false));
-            case 4 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.HASTE, 40, 1, true, false));
-            case 5 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.STRENGTH, 40, 0, true, false));
-            case 6 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, 40, 0, true, false));
-            case 7 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, 40, 1, true, false));
-            case 8 -> {
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.NIGHT_VISION, 220, 0, true, false));
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.WATER_BREATHING, 40, 0, true, false));
+    public static void register() {
+        ServerTickEvents.END_SERVER_TICK.register(TitleAbilityManager::onServerTick);
+        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
+            if (!(entity instanceof ServerPlayerEntity player)) return true;
+            int tier = getPlayerTier(player); ServerWorld world = player.getServerWorld();
+            if (tier >= 3 && source.isOf(DamageTypes.FALL) && player.isSneaking()) {
+                double bounce = Math.min(2.2, Math.sqrt(amount) * 0.35); player.setVelocity(player.getVelocity().x, bounce, player.getVelocity().z);
+                world.spawnParticles(ParticleTypes.CLOUD, player.getX(), player.getY(), player.getZ(), 35, 1.5, 0.2, 1.5, 0.1);
+                for (LivingEntity t : world.getEntitiesByClass(LivingEntity.class, player.getBoundingBox().expand(4.5), e -> e != player)) { t.addVelocity(0, bounce * 0.85, 0); }
+                return false;
             }
-            case 9 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.RESISTANCE, 40, 0, true, false));
-            case 10 -> player.addStatusEffect(new StatusEffectInstance(StatusEffects.FIRE_RESISTANCE, 40, 0, true, false));
-            case 11 -> {
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.STRENGTH, 40, 1, true, false));
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.JUMP_BOOST, 40, 1, true, false));
-            }
-            case 12 -> {
-                // Пассивный бонус 12 уровня + активная Орбитальная пушка на ПКМ компасом
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.ABSORPTION, 40, 1, true, false));
-            }
-        }
-    }
-
-    // Использование активной способности по ПКМ компасом (например, Орбитальная пушка)
-    public static void useActiveCompassAbility(ServerPlayerEntity player, ChmoState state) {
-        int selected = state.getSelectedAbility(player.getUuid());
-        int unlocked = state.getTitleLevel(player.getUuid());
-
-        if (selected == 0) {
-            player.sendMessage(Text.literal("У вас не выбрана способность! Нажмите Shift + ПКМ с компасом, чтобы открыть меню.").formatted(Formatting.YELLOW), true);
-            return;
-        }
-
-        if (selected > unlocked) {
-            return;
-        }
-
-        // Пример: если выбрана способность с Орбитальной пушкой (например, 12-й титул, или любой, где она у вас привязана)
-        if (selected == 12) {
-            if (player.getItemCooldownManager().isCoolingDown(Items.COMPASS)) {
-                return;
-            }
-            HitResult hit = player.raycast(60.0D, 0.0F, false);
-            if (hit.getType() == HitResult.Type.BLOCK) {
-                BlockPos pos = ((BlockHitResult) hit).getBlockPos();
-                World world = player.getWorld();
-
-                // Удар орбитальной пушки (молнии + взрыв без разрушения блоков или с ним)
-                for (int i = 0; i < 3; i++) {
-                    LightningEntity lightning = EntityType.LIGHTNING_BOLT.create(world);
-                    if (lightning != null) {
-                        lightning.refreshPositionAfterTeleport(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
-                        world.spawnEntity(lightning);
-                    }
-                }
-                world.createExplosion(player, pos.getX() + 0.5, pos.getY() + 1, pos.getZ() + 0.5, 4.0F, World.ExplosionSourceType.MOB);
-                player.getItemCooldownManager().set(Items.COMPASS, 100); // КД 5 секунд
-                player.sendMessage(Text.literal("Орбитальный удар нанесён!").formatted(Formatting.LIGHT_PURPLE), true);
-            } else {
-                player.sendMessage(Text.literal("Цель слишком далеко!").formatted(Formatting.RED), true);
-            }
-        } else {
-            player.sendMessage(Text.literal("Сейчас активна пассивная способность: " + TITLE_NAMES[selected] + " (Shift + ПКМ — сменить)").formatted(Formatting.GREEN), true);
-        }
-    }
-
-    // Открытие GUI внутри компаса для включения/выключения разблокированных способностей
-    public static void openCompassMenu(ServerPlayerEntity player, ChmoState state) {
-        int unlockedLevel = state.getTitleLevel(player.getUuid());
-        int currentSelected = state.getSelectedAbility(player.getUuid());
-
-        SimpleInventory inv = new SimpleInventory(27);
-
-        for (int lvl = 2; lvl <= 12; lvl++) {
-            int slot = lvl - 2; // Слоты с 0 по 10
-            if (lvl <= unlockedLevel) {
-                boolean isSelected = (currentSelected == lvl);
-                ItemStack icon = new ItemStack(ABILITY_COLORS[lvl]);
-                String status = isSelected ? " [ВКЛЮЧЕНА]" : " [Нажмите, чтобы включить]";
-                Formatting color = isSelected ? Formatting.GREEN : Formatting.AQUA;
-                icon.setCustomName(Text.literal(TITLE_NAMES[lvl] + status).formatted(color));
-                inv.setStack(slot, icon);
-            } else {
-                ItemStack locked = new ItemStack(Items.GRAY_STAINED_GLASS_PANE);
-                locked.setCustomName(Text.literal(TITLE_NAMES[lvl] + " [ЗАБЛОКИРОВАНО]").formatted(Formatting.DARK_GRAY));
-                inv.setStack(slot, locked);
-            }
-        }
-
-        // Кнопка полного отключения способностей в 26-м слоте
-        ItemStack disableAll = new ItemStack(Items.BARRIER);
-        disableAll.setCustomName(Text.literal("Отключить все способности").formatted(Formatting.RED));
-        inv.setStack(26, disableAll);
-
-        player.openHandledScreen(new NamedScreenHandlerFactory() {
-            @Override
-            public Text getDisplayName() {
-                return Text.literal("Выбор способности (Компас)");
-            }
-
-            @Override
-            public ScreenHandler createMenu(int syncId, PlayerInventory playerInventory, PlayerEntity playerEntity) {
-                return new GenericContainerScreenHandler(ScreenHandlerType.GENERIC_9X3, syncId, playerInventory, inv, 3) {
-                    @Override
-                    public void onSlotClick(int slotIndex, int button, SlotActionType actionType, PlayerEntity clicker) {
-                        if (slotIndex >= 0 && slotIndex < 27 && clicker instanceof ServerPlayerEntity serverPlayer) {
-                            if (slotIndex == 26) {
-                                state.setSelectedAbility(serverPlayer.getUuid(), 0);
-                                clearAbilityEffects(serverPlayer);
-                                serverPlayer.sendMessage(Text.literal("Все способности отключены.").formatted(Formatting.YELLOW), false);
-                                serverPlayer.closeHandledScreen();
-                                return;
-                            }
-
-                            int clickedLevel = slotIndex + 2;
-                            if (clickedLevel >= 2 && clickedLevel <= 12) {
-                                int maxLvl = state.getTitleLevel(serverPlayer.getUuid());
-                                if (clickedLevel <= maxLvl) {
-                                    int current = state.getSelectedAbility(serverPlayer.getUuid());
-                                    clearAbilityEffects(serverPlayer);
-
-                                    if (current == clickedLevel) {
-                                        // Если нажали на уже включённую — выключаем
-                                        state.setSelectedAbility(serverPlayer.getUuid(), 0);
-                                        serverPlayer.sendMessage(Text.literal("Способность «" + TITLE_NAMES[clickedLevel] + "» выключена.").formatted(Formatting.YELLOW), false);
-                                    } else {
-                                        // Включаем новую (старая автоматически заменяется и не стакается)
-                                        state.setSelectedAbility(serverPlayer.getUuid(), clickedLevel);
-                                        serverPlayer.sendMessage(Text.literal("Активирована способность: " + TITLE_NAMES[clickedLevel]).formatted(Formatting.GREEN), false);
-                                    }
-                                    serverPlayer.closeHandledScreen();
-                                } else {
-                                    serverPlayer.sendMessage(Text.literal("Эта способность ещё не разблокирована!").formatted(Formatting.RED), false);
-                                }
-                            }
-                        }
-                        // Не вызываем super.onSlotClick, чтобы предметы нельзя было забрать из меню компаса
-                    }
-                };
+            if (tier >= 11 && player.getHealth() - amount <= 0.0f && tryRewindTime(player, true)) return false;
+            if (tier >= 1 && amount >= 1.0f && !source.isOf(DamageTypes.FALL)) { Vec3d l = player.getRotationVector(); player.addVelocity(l.x * 0.7, 0.25, l.z * 0.7); world.spawnParticles(ParticleTypes.SQUID_INK, player.getX(), player.getY()+0.5, player.getZ(), 10, 0.3, 0.3, 0.3, 0.05); }
+            if (tier >= 5 && source.getAttacker() instanceof LivingEntity a) a.setOnFireFor(5);
+            if (tier >= 9 && player.getHealth() <= 8.0f && amount > 1.5f) { ServerPlayerEntity p = findPartner(player); if (p != null && p.getHealth() > 4.0f) { p.damage(world.getDamageSources().generic(), amount * 0.5f); player.heal(amount * 0.5f); } }
+            return true;
+        });
+        AttackEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
+            if (world.isClient || !(player instanceof ServerPlayerEntity sp) || !(entity instanceof LivingEntity t)) return ActionResult.PASS;
+            if (getPlayerTier(sp) >= 6 && world.random.nextFloat() < 0.25f) {
+                Vec3d pp = sp.getPos(), tp = t.getPos(); sp.teleport((ServerWorld)world, tp.x, tp.y, tp.z, sp.getYaw(), sp.getPitch()); t.teleport(pp.x, pp.y, pp.z); sp.heal(2.0f);
+                world.playSound(null, sp.getBlockPos(), SoundEvents.ENTITY_ENDERMAN_TELEPORT, SoundCategory.PLAYERS, 1.0f, 1.4f);
+            } return ActionResult.PASS;
+        });
+        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) -> {
+            if (world.isClient || !(player instanceof ServerPlayerEntity sp)) return;
+            if (getPlayerTier(sp) >= 7 && (state.isOf(Blocks.STONE) || state.isOf(Blocks.DEEPSLATE))) {
+                ServerWorld sw = (ServerWorld) world;
+                BlockPos.iterate(pos.add(-8,-8,-8), pos.add(8,8,8)).forEach(cp -> { if (isValuableOre(sw.getBlockState(cp).getBlock())) sw.spawnParticles(sp, ParticleTypes.END_ROD, true, cp.getX()+0.5, cp.getY()+0.5, cp.getZ()+0.5, 3, 0.1, 0.1, 0.1, 0.01); });
+                for (BlockPos o : new BlockPos[]{pos.up(), pos.down(), pos.north(), pos.south(), pos.east(), pos.west()}) if (sw.getBlockState(o).getBlock() == Blocks.STONE || sw.getBlockState(o).getBlock() == Blocks.DEEPSLATE) sw.breakBlock(o, true, sp);
             }
         });
     }
 
-    private static void clearAbilityEffects(ServerPlayerEntity player) {
-        player.removeStatusEffect(StatusEffects.SPEED);
-        player.removeStatusEffect(StatusEffects.JUMP_BOOST);
-        player.removeStatusEffect(StatusEffects.HASTE);
-        player.removeStatusEffect(StatusEffects.STRENGTH);
-        player.removeStatusEffect(StatusEffects.REGENERATION);
-        player.removeStatusEffect(StatusEffects.NIGHT_VISION);
-        player.removeStatusEffect(StatusEffects.WATER_BREATHING);
-        player.removeStatusEffect(StatusEffects.RESISTANCE);
-        player.removeStatusEffect(StatusEffects.FIRE_RESISTANCE);
-        player.removeStatusEffect(StatusEffects.ABSORPTION);
+    private static void onServerTick(MinecraftServer server) {
+        long ticks = server.getTicks();
+        tempBlocks.entrySet().removeIf(e -> { if (ticks >= e.getValue()) { if (e.getKey().world().getBlockState(e.getKey().pos()).isOf(Blocks.CYAN_STAINED_GLASS)) e.getKey().world().setBlockState(e.getKey().pos(), Blocks.AIR.getDefaultState()); return true; } return false; });
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            int tier = getPlayerTier(player); ServerWorld world = player.getServerWorld();
+            if (tier >= 1 && ticks % 80 == 0 && ((world.isDay() && world.isSkyVisible(player.getBlockPos())) || player.isTouchingWater())) player.getHungerManager().add(1, 0.2f);
+            if (tier >= 2) {
+                if (ticks % 20 == 0) for (AnimalEntity a : world.getEntitiesByClass(AnimalEntity.class, player.getBoundingBox().expand(8.0), x -> true)) a.getNavigation().startMovingTo(player, 1.25);
+                if (ticks % 200 == 0) { List<ChickenEntity> c = world.getEntitiesByClass(ChickenEntity.class, player.getBoundingBox().expand(8.0), x -> true); if (!c.isEmpty()) c.get(world.random.nextInt(c.size())).dropItem(new Item[]{Items.IRON_INGOT, Items.COAL, Items.EMERALD}[world.random.nextInt(3)]); }
+            }
+            if (tier >= 4) for (Entity e : world.getOtherEntities(player, player.getBoundingBox().expand(9.0), x -> x instanceof ItemEntity || x instanceof ExperienceOrbEntity)) e.setVelocity(e.getVelocity().multiply(0.5).add(player.getPos().add(0,0.5,0).subtract(e.getPos()).normalize().multiply(0.35)));
+            if (tier >= 5 && player.isSprinting() && ticks % 60 == 0) smeltOne(player);
+            if (tier >= 8) {
+                for (ProjectileEntity p : world.getEntitiesByClass(ProjectileEntity.class, player.getBoundingBox().expand(3.5), x -> x.getOwner() != player)) if (p.getVelocity().lengthSquared() > 0.01) { p.setVelocity(p.getVelocity().multiply(-1.5)); p.setOwner(player); }
+                for (CreeperEntity c : world.getEntitiesByClass(CreeperEntity.class, player.getBoundingBox().expand(4.5), x -> true)) c.getNavigation().startMovingTo(player.getX() + (c.getX()-player.getX())*2, c.getY(), c.getZ() + (c.getZ()-player.getZ())*2, 1.5);
+            }
+            if (tier >= 10 && grabbedEntities.containsKey(player.getUuid())) { Entity g = world.getEntityById(grabbedEntities.get(player.getUuid())); if (g == null || !g.isAlive()) grabbedEntities.remove(player.getUuid()); else { g.setVelocity(player.getEyePos().add(player.getRotationVector().multiply(3.8)).subtract(g.getPos()).multiply(0.45)); g.fallDistance = 0; } }
+            if (tier >= 11 && ticks % 10 == 0) { Deque<PlayerSnapshot> d = timeHistory.computeIfAbsent(player.getUuid(), k -> new ArrayDeque<>()); if (d.size() >= 10) d.pollFirst(); d.addLast(new PlayerSnapshot(world, player.getPos(), player.getHealth(), player.getHungerManager().getFoodLevel(), player.getYaw(), player.getPitch())); }
+            if (tier >= 12 && player.isSneaking() && !player.isOnGround()) for (int dx=-1; dx<=1; dx++) for (int dz=-1; dz<=1; dz++) { BlockPos p = player.getBlockPos().down().add(dx,0,dz); if (world.getBlockState(p).isAir()) { world.setBlockState(p, Blocks.CYAN_STAINED_GLASS.getDefaultState()); tempBlocks.put(new GlobalBlockPos(world, p), ticks+60); } }
+        }
     }
+
+    public static void triggerActiveAbility(ServerPlayerEntity player) {
+        int tier = getPlayerTier(player); ServerWorld world = player.getServerWorld(); long now = world.getServer().getTicks();
+        if (tier >= 10 && grabbedEntities.containsKey(player.getUuid())) { Entity g = world.getEntityById(grabbedEntities.remove(player.getUuid())); if (g != null) g.setVelocity(player.getRotationVector().multiply(2.8).add(0,0.5,0)); return; }
+        if (now < abilityCooldowns.getOrDefault(player.getUuid(), 0L)) { player.sendMessage(Text.literal("⏳ Перезарядка...").formatted(Formatting.RED), true); return; }
+        if (tier >= 12) { HitResult h = player.raycast(45, 0, false); Vec3d t = h.getPos(); for(int i=0;i<3;i++){ LightningEntity l = EntityType.LIGHTNING_BOLT.create(world); if(l!=null){ l.refreshPositionAfterTeleport(t.x, t.y, t.z); world.spawnEntity(l); }} abilityCooldowns.put(player.getUuid(), now+200); }
+        else if (tier >= 11) { if (tryRewindTime(player, false)) abilityCooldowns.put(player.getUuid(), now+400); }
+        else if (tier >= 10) { Vec3d lp = player.getEyePos().add(player.getRotationVector().multiply(3.5)); List<LivingEntity> ts = world.getEntitiesByClass(LivingEntity.class, Box.of(lp, 4, 4, 4), e -> e != player); if (!ts.isEmpty()) grabbedEntities.put(player.getUuid(), ts.get(0).getId()); }
+        else if (tier >= 4) { ServerPlayerEntity p = findPartner(player); if (p != null && p.squaredDistanceTo(player) <= 144 && !p.getMainHandStack().isEmpty()) { player.getInventory().offerOrDrop(p.getMainHandStack().split(1)); abilityCooldowns.put(player.getUuid(), now+300); } else { player.setVelocity(player.getRotationVector().multiply(1.6).add(0,0.35,0)); abilityCooldowns.put(player.getUuid(), now+120); } }
+        else { player.setVelocity(player.getRotationVector().multiply(1.2).add(0,0.3,0)); abilityCooldowns.put(player.getUuid(), now+100); }
+    }
+
+    private static boolean tryRewindTime(ServerPlayerEntity p, boolean death) { long n = p.getServer().getTicks(); if (death && n < abilityCooldowns.getOrDefault(p.getUuid(), 0L)) return false; Deque<PlayerSnapshot> d = timeHistory.get(p.getUuid()); if (d == null || d.isEmpty()) return false; PlayerSnapshot s = d.peekFirst(); p.teleport(s.world(), s.pos().x, s.pos().y, s.pos().z, s.yaw(), s.pitch()); p.setHealth(Math.max(6.0f, s.health())); p.getHungerManager().setFoodLevel(s.food()); p.extinguish(); p.fallDistance = 0; abilityCooldowns.put(p.getUuid(), n+900); return true; }
+    private static void smeltOne(ServerPlayerEntity p) { Map<Item, Item> r = Map.of(Items.RAW_IRON, Items.IRON_INGOT, Items.RAW_GOLD, Items.GOLD_INGOT, Items.BEEF, Items.COOKED_BEEF, Items.PORKCHOP, Items.COOKED_PORKCHOP); for (int i=0; i<p.getInventory().size(); i++) { ItemStack st = p.getInventory().getStack(i); if (r.containsKey(st.getItem())) { st.decrement(1); p.getInventory().offerOrDrop(new ItemStack(r.get(st.getItem()))); return; } } }
+    private static boolean isValuableOre(Block b) { return b == Blocks.DIAMOND_ORE || b == Blocks.DEEPSLATE_DIAMOND_ORE || b == Blocks.GOLD_ORE || b == Blocks.DEEPSLATE_GOLD_ORE || b == Blocks.IRON_ORE || b == Blocks.DEEPSLATE_IRON_ORE; }
+    private static ServerPlayerEntity findPartner(ServerPlayerEntity p) { for (ServerPlayerEntity o : p.getServer().getPlayerManager().getPlayerList()) if (!o.getUuid().equals(p.getUuid())) return o; return null; }
 }
