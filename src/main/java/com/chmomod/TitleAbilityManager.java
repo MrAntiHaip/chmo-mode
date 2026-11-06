@@ -59,7 +59,7 @@ public class TitleAbilityManager {
                 player.setVelocity(player.getVelocity().x, bounce, player.getVelocity().z);
                 player.velocityModified = true;
 
-                world.spawnParticles(ParticleTypes.SLIME, player.getX(), player.getY(), player.getZ(), 35, 1.5, 0.2, 1.5, 0.1);
+                world.spawnParticles(ParticleTypes.CLOUD, player.getX(), player.getY(), player.getZ(), 35, 1.5, 0.2, 1.5, 0.1);
                 world.playSound(null, player.getBlockPos(), SoundEvents.ENTITY_SLIME_JUMP, SoundCategory.PLAYERS, 1.5f, 0.8f);
 
                 for (LivingEntity target : world.getEntitiesByClass(LivingEntity.class, player.getBoundingBox().expand(4.5), e -> e != player)) {
